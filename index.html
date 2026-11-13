@@ -68,6 +68,16 @@ a{color:var(--acc)}
 .chip{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 9px;display:flex;justify-content:space-between;gap:10px}
 .chip span{color:var(--dim)} .chip b{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
 .chip.head{grid-column:1/-1;background:none;border:none;padding:2px 0;color:var(--dim)}
+#mask2{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:60}
+#cfgModal{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;width:760px;max-width:96vw;max-height:94vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+#cfgModal h2{margin:0 0 8px;font-size:16px}
+.cfgsec{border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-bottom:8px;background:var(--panel2)}
+.cfgsec h4{margin:0 0 6px;font-size:12px;color:var(--dim);font-weight:500}
+.frow{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.frow label{display:flex;gap:5px;align-items:center;color:var(--dim)}
+.frow input[type=number]{width:78px;background:#0e1217;border:1px solid var(--line);border-radius:4px;padding:3px 5px;color:var(--tx)}
+.frow input[type=text]{width:190px;background:#0e1217;border:1px solid var(--line);border-radius:4px;padding:3px 5px;color:var(--tx)}
+.cfgerr{color:var(--dn);min-height:18px}
 </style>
 </head>
 <body>
@@ -117,12 +127,11 @@ a{color:var(--acc)}
     <div class="card"><h3>当前 K 线</h3><div class="kv" id="barInfo"></div></div>
     <div class="card">
       <h3>下单（当前K线收盘价成交）</h3>
-      <div class="row" style="display:flex;gap:6px;margin-bottom:6px">
-        <label style="flex:1" class="dim">止损规则<br><select id="selRule" style="width:100%">
-          <option value="atr3">3ATR 吊灯止损</option>
-          <option value="bb075">布林带止损 m=0.75</option>
-          <option value="bb1">布林带止损 m=1.0</option></select></label>
+      <div style="display:flex;gap:6px;margin-bottom:6px;align-items:flex-end">
+        <label style="flex:1" class="dim">止损预设<br><select id="selPreset" style="width:100%"></select></label>
+        <button id="btnCfg">⚙ 止损配置</button>
       </div>
+      <div class="dim" id="cfgSummary" style="font-size:11px;margin-bottom:6px"></div>
       <label class="dim" style="display:flex;gap:5px;align-items:center;margin-bottom:6px"><input type="checkbox" id="chkJump" checked>下单后自动跳转到平仓（取消则持仓中逐根看）</label>
       <div style="display:flex;gap:8px"><button class="btn-long" id="btnLong">做多 <span class="kb">B</span></button><button class="btn-short" id="btnShort">做空 <span class="kb">S</span></button></div>
       <div class="kv" id="stopPrev" style="margin-top:8px"></div>
@@ -134,12 +143,13 @@ a{color:var(--acc)}
 </main>
 <div id="bottom">
   <div class="bar"><button class="tab on" id="tabT">交易记录 <span class="dim" id="tradeCount"></span></button><button class="tab" id="tabS">成绩面板</button><span style="flex:1"></span><button id="btnCsv">导出 CSV</button></div>
-  <div id="tablewrap"><table><thead><tr><th>#</th><th>方向</th><th>止损</th><th>入场时间</th><th>入场价</th><th>出场时间</th><th>出场价</th><th>根数</th><th>天数</th><th>净收益</th><th>R</th><th>最大浮盈</th><th>最大浮亏</th><th>状态</th></tr></thead><tbody id="tbody"></tbody></table></div>
+  <div id="tablewrap"><table><thead><tr><th>#</th><th>方向</th><th>配置</th><th>入场时间</th><th>入场价</th><th>出场时间</th><th>出场价</th><th>根数</th><th>天数</th><th>净收益</th><th>R</th><th>最大浮盈</th><th>最大浮亏</th><th>状态</th></tr></thead><tbody id="tbody"></tbody></table></div>
   <div id="statswrap" style="display:none"><div id="stats"></div></div>
 </div>
 <footer>图表：TradingView Lightweight Charts™（Apache-2.0，已内联）· 数据来自 Binance 现货与 Dukascopy · 回放仅供复盘研究，不构成投资建议</footer>
 </div>
 <div id="mask"><div id="modal"></div></div>
+<div id="mask2"><div id="cfgModal"></div></div>
 
 <script>
 /*!
@@ -156,28 +166,74 @@ const DATA = {"BTCUSDT":{"4h":{"n":20230,"k":100,"b":"eNrsfXm8TtUX9z73Xq6ZzDMlsy
 </script>
 <script>
 'use strict';
-/* ================= 常量与口径（与 btc_every_bar_3atr.py / btc_bbstop.py / multi_trend 完全一致） =================
- * 入场：当前 bar 收盘。
- * 3ATR 吊灯：多单 stop=max(stop, 入场后最高High − 3×当前bar ATR20)，初始 stop=入场bar High − 3×ATR20(入场bar)；收盘<=stop 即以该bar收盘价出场；空单镜像。
- * 布林带止损：W0=4×std20(close,ddof=0) 入场bar固定；stop=入场后最高High − m×W0；收盘<=stop 出场；空单镜像。
- * ATR20 = TR 的 20 根简单均值（TR=max(H-L,|H-前收|,|L-前收|)，首根 TR=H-L）。
- * 费用：单边 0.02%，净收益 = 价差收益 − 2×0.0002。R = 净收益 / (入场止损距离/入场价)。
- * 数据末尾仍未触发止损：按最后一根收盘计，标注“未平仓”。 */
-const FEE = 0.0002, ATR_N = 20;
-const ENTRY_START = 1502942400; // 2017-08-17 04:00 UTC，与回测一致
-const IS_END = 1609459200;      // 2021-01-01 UTC：样本内 ≤2020，样本外 ≥2021
-const RULES = {
-  atr3:  {label: '3ATR 吊灯', type: 'atr', k: 3},
-  bb075: {label: '布林带 m=0.75', type: 'bb', m: 0.75},
-  bb1:   {label: '布林带 m=1.0', type: 'bb', m: 1.0},
-};
-const ASSETS = [
-  ['BTCUSDT', '比特币 BTCUSDT', 2, 1], ['ETHUSDT', '以太坊 ETHUSDT', 2, 1],
-  ['XAUUSD', '黄金 XAUUSD', 2, 0], ['XAGUSD', '白银 XAGUSD', 3, 0],
-  ['WTI', 'WTI 原油', 2, 0], ['BRENT', '布伦特原油 BRENT', 2, 0],
-  ['NAS100', '纳指100 NAS100', 1, 0], ['SPX500', '标普500 SPX500', 1, 0],
-  ['EURUSD', '欧元美元 EURUSD', 5, 0], ['USDJPY', '美元日元 USDJPY', 3, 0],
+/* ================= 常量与口径 =================
+ * 默认配置（预设 3ATR / BB0.75 / BB1.0）与 btc_every_bar_3atr.py / btc_bbstop.py / multi_trend/run_bbstop.py 完全一致：
+ *  入场=当前bar收盘；止损=入场后最高High − 距离（只上移，空单镜像）；收盘判断、收盘成交；单边费率 0.02%。
+ * 新增可选口径（均为对默认口径的扩展）：
+ *  - 触发口径 trig=close：当根先用本根High/Low更新止损，再看收盘是否穿越，收盘价成交（默认）。
+ *    trig=intra：用“上一根收盘后的止损线”判断本根 Low/High 是否触及，成交价=止损价；若本根开盘已跳空越过止损线则成交价=开盘价；
+ *              本根未触发时再用本根High/Low更新止损线。
+ *  - 同一根多个出场同时满足：不利出场（止损/唐奇安出场）优先于止盈；止损与唐奇安出场同时触及时取先被碰到的（多单取较高者）。
+ *  - 止盈：R 倍数（入场止损距离 dist0 的倍数）或百分比；close 模式收盘价穿越即收盘成交，intra 模式 High/Low 触及以止盈价成交（跳空取开盘价）。
+ *  - 最长持仓 maxHold：持仓满 N 根时若本根未出场，则以该根收盘价平仓。
+ *  - 唐奇安出场：多单价格跌破“前 N 根（j-N..j-1，不含当前根）最低 Low”出场；空单镜像（最高 High）。比较用 <= / >=。
+ *  - 参照价 ref：high（多单用最高High，空单用最低Low，默认）或 close（最高/最低收盘价）。
+ *  - 数据末尾未触发：按最后一根收盘计，标注“未平仓”。 */
+const ATR_N = 20;
+const ENTRY_START = 1502942400; // 2017-08-17 04:00 UTC
+const IS_END = 1609459200;      // 2021-01-01 UTC
+const DEF = {type: 'atr', k: 3, atrN: 20, atrMode: 'cur',
+  m: 0.75, bbN: 20, bbSd: 2, bbMode: 'entry',
+  dm: 0.75, dN: 20, dMode: 'cur',
+  pct: 0.05, fixUnit: 'atr', fixK: 3, fixN: 20, fixPct: 0.05,
+  tpOn: false, tpUnit: 'R', tpV: 3, maxHold: 0, trig: 'close', ref: 'high', fee: 0.0002,
+  donExit: false, donExitN: 10};
+const mkCfg = o => Object.assign({}, DEF, o);
+const BUILTIN = [
+  {name: '3ATR 吊灯', cfg: mkCfg({type: 'atr'})},
+  {name: '布林带 m=0.75', cfg: mkCfg({type: 'bb', m: 0.75})},
+  {name: '布林带 m=1.0', cfg: mkCfg({type: 'bb', m: 1.0})},
+  {name: '唐奇安宽度 m=0.75 N=20（随当前bar）', cfg: mkCfg({type: 'donch'})},
+  {name: '海龟式：固定2ATR止损+唐奇安出场N=10', cfg: mkCfg({type: 'fixed', fixUnit: 'atr', fixK: 2, donExit: true, donExitN: 10})},
 ];
+const LEGACY_RULE = {atr3: 0, bb075: 1, bb1: 2};
+const TYPE_CN = {atr: 'ATR吊灯', bb: '布林带宽', donch: '唐奇安宽度', pct: '百分比移动', fixed: '固定止损'};
+const normCfg = c => Object.assign({}, DEF, c || {});
+const FIELDS = {
+  atr: ['k', 'atrN', 'atrMode'], bb: ['m', 'bbN', 'bbSd', 'bbMode'], donch: ['dm', 'dN', 'dMode'],
+  pct: ['pct'], fixed: ['fixUnit', 'fixK', 'fixN', 'fixPct'],
+};
+function canonCfg(c) { // 只保留与所选类型相关的字段，用作分组键
+  c = normCfg(c); const o = {type: c.type};
+  for (const f of FIELDS[c.type]) o[f] = c[f];
+  if (c.type !== 'fixed') o.ref = c.ref;
+  for (const f of ['tpOn', 'maxHold', 'trig', 'fee', 'donExit']) o[f] = c[f];
+  if (c.tpOn) { o.tpUnit = c.tpUnit; o.tpV = c.tpV; }
+  if (c.donExit) o.donExitN = c.donExitN;
+  return o;
+}
+const cfgKey = c => JSON.stringify(canonCfg(c));
+function describeCfg(c) {
+  c = normCfg(c); const p = [];
+  const mode = x => x === 'cur' ? '随当前bar' : '入场固定';
+  if (c.type === 'atr') p.push(`ATR吊灯 k=${c.k} ATR${c.atrN} ${mode(c.atrMode)}`);
+  else if (c.type === 'bb') p.push(`布林带宽 m=${c.m} (${c.bbN},${c.bbSd}σ) ${mode(c.bbMode)}`);
+  else if (c.type === 'donch') p.push(`唐奇安宽度 m=${c.dm} N=${c.dN} ${mode(c.dMode)}`);
+  else if (c.type === 'pct') p.push(`百分比移动 ${+(c.pct * 100).toFixed(4)}%`);
+  else p.push(c.fixUnit === 'atr' ? `固定止损 ${c.fixK}×ATR${c.fixN}` : `固定止损 ${+(c.fixPct * 100).toFixed(4)}%`);
+  if (c.type !== 'fixed') p.push(c.ref === 'high' ? '参照最高High' : '参照最高收盘');
+  if (c.tpOn) p.push(c.tpUnit === 'R' ? `止盈 ${c.tpV}R` : `止盈 ${+(c.tpV * 100).toFixed(4)}%`);
+  if (c.maxHold > 0) p.push(`最长${c.maxHold}根`);
+  if (c.donExit) p.push(`唐奇安出场N=${c.donExitN}`);
+  p.push(c.trig === 'close' ? '收盘判断' : '盘中触及');
+  p.push(`费率${+(c.fee * 100).toFixed(4)}%`);
+  return p.join(' · ');
+}
+function cfgName(c, presets) {
+  const k = cfgKey(c);
+  for (const p of presets) if (cfgKey(p.cfg) === k) return p.name;
+  return '自定义';
+}
 
 /* ================= 数据解码 ================= */
 function b64ToBytes(s) { const bin = atob(s), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
@@ -209,81 +265,143 @@ function ewma(x, span) {
   for (let i = 0; i < n; i++) { if (i > 0) y = a * x[i] + (1 - a) * y; if (i >= span - 1) out[i] = y; }
   return out;
 }
-function buildInd(D) {
-  const {n, h, l, c} = D;
-  const tr = new Float64Array(n), atr = new Float64Array(n).fill(NaN), W = new Float64Array(n).fill(NaN);
-  const mid = new Float64Array(n).fill(NaN), up = new Float64Array(n).fill(NaN), lo = new Float64Array(n).fill(NaN);
+function trArr(D) {
+  const {n, h, l, c} = D, tr = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     let v = Math.abs(h[i] - l[i]);
-    if (i > 0) { v = Math.max(v, Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])); }
+    if (i > 0) v = Math.max(v, Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]));
     tr[i] = v;
   }
-  for (let i = ATR_N - 1; i < n; i++) {
-    let s = 0, sc = 0;
-    for (let q = i - ATR_N + 1; q <= i; q++) { s += tr[q]; sc += c[q]; }
-    atr[i] = s / ATR_N;
-    const m = sc / ATR_N; let v = 0;
-    for (let q = i - ATR_N + 1; q <= i; q++) { const d = c[q] - m; v += d * d; }
-    const sd = Math.sqrt(v / ATR_N);
-    W[i] = 4 * sd; mid[i] = m; up[i] = m + 2 * sd; lo[i] = m - 2 * sd;
+  return tr;
+}
+function atrN(D, N) {
+  const tr = trArr(D), n = D.n, out = new Float64Array(n).fill(NaN);
+  for (let i = N - 1; i < n; i++) { let s = 0; for (let q = i - N + 1; q <= i; q++) s += tr[q]; out[i] = s / N; }
+  return out;
+}
+function stdArrs(D, N) { // 返回 {mid, sd}
+  const n = D.n, c = D.c, mid = new Float64Array(n).fill(NaN), sd = new Float64Array(n).fill(NaN);
+  for (let i = N - 1; i < n; i++) {
+    let sc = 0; for (let q = i - N + 1; q <= i; q++) sc += c[q];
+    const m = sc / N; let v = 0;
+    for (let q = i - N + 1; q <= i; q++) { const d = c[q] - m; v += d * d; }
+    mid[i] = m; sd[i] = Math.sqrt(v / N);
   }
-  return {atr, W, mid, up, lo, e12: ewma(c, 12), e48: ewma(c, 48)};
+  return {mid, sd};
+}
+function buildInd(D) {
+  const n = D.n, atr = atrN(D, ATR_N), {mid, sd} = stdArrs(D, 20);
+  const W = new Float64Array(n).fill(NaN), up = new Float64Array(n).fill(NaN), lo = new Float64Array(n).fill(NaN);
+  for (let i = 0; i < n; i++) if (isFinite(sd[i])) { W[i] = 4 * sd[i]; up[i] = mid[i] + 2 * sd[i]; lo[i] = mid[i] - 2 * sd[i]; }
+  return {atr, W, mid, up, lo, e12: ewma(D.c, 12), e48: ewma(D.c, 48), cache: {}};
+}
+/* 参数化指标（带缓存） */
+function indArr(D, I, kind, N, sd) {
+  if (kind === 'atr' && N === ATR_N) return I.atr;
+  if (kind === 'bb' && N === 20 && sd === 2) return I.W;
+  const key = kind + '|' + N + '|' + (sd === undefined ? '' : sd);
+  if (I.cache[key]) return I.cache[key];
+  const n = D.n; let out;
+  if (kind === 'atr') out = atrN(D, N);
+  else if (kind === 'bb') { const {sd: s} = stdArrs(D, N); out = new Float64Array(n); for (let i = 0; i < n; i++) out[i] = (2 * sd) * s[i]; }
+  else if (kind === 'donch') { out = new Float64Array(n).fill(NaN); for (let i = N - 1; i < n; i++) { let hi = -Infinity, lw = Infinity; for (let q = i - N + 1; q <= i; q++) { if (D.h[q] > hi) hi = D.h[q]; if (D.l[q] < lw) lw = D.l[q]; } out[i] = hi - lw; } }
+  else if (kind === 'LL' || kind === 'HH') { // 前 N 根（j-N..j-1）最低 Low / 最高 High
+    out = new Float64Array(n).fill(NaN);
+    for (let j = N; j < n; j++) { let v = kind === 'LL' ? Infinity : -Infinity; for (let q = j - N; q < j; q++) { if (kind === 'LL') { if (D.l[q] < v) v = D.l[q]; } else if (D.h[q] > v) v = D.h[q]; } out[j] = v; }
+  }
+  I.cache[key] = out; return out;
 }
 
 /* ================= 交易核心 ================= */
-function entryDist(D, I, i, ruleKey) {
-  const r = RULES[ruleKey];
-  return r.type === 'atr' ? r.k * I.atr[i] : r.m * I.W[i];
+function distInfo(D, I, i, c) { // 入场止损距离 dist0、动态数组、倍数
+  const e = D.c[i];
+  switch (c.type) {
+    case 'atr': { const A = indArr(D, I, 'atr', c.atrN); return {dist0: c.k * A[i], arr: c.atrMode === 'cur' ? A : null, mult: c.k}; }
+    case 'bb': { const A = indArr(D, I, 'bb', c.bbN, c.bbSd); return {dist0: c.m * A[i], arr: c.bbMode === 'cur' ? A : null, mult: c.m}; }
+    case 'donch': { const A = indArr(D, I, 'donch', c.dN); return {dist0: c.dm * A[i], arr: c.dMode === 'cur' ? A : null, mult: c.dm}; }
+    case 'pct': return {dist0: c.pct * e, arr: null, mult: 0};
+    default: return {dist0: c.fixUnit === 'atr' ? c.fixK * indArr(D, I, 'atr', c.fixN)[i] : c.fixPct * e, arr: null, mult: 0};
+  }
 }
-function canEnter(D, I, i, ruleKey) {
+function entryDist(D, I, i, cfg) { return distInfo(D, I, i, normCfg(cfg)).dist0; }
+function canEnter(D, I, i, cfg) {
   if (i < 0 || i >= D.n - 1) return false;
   if (!(D.t[i] >= ENTRY_START)) return false;
   if (!(isFinite(D.c[i]) && D.c[i] > 0)) return false;
-  const r = RULES[ruleKey];
-  const v = r.type === 'atr' ? I.atr[i] : I.W[i];
+  const v = distInfo(D, I, i, normCfg(cfg)).dist0;
   return isFinite(v) && v > 0;
 }
-function newPos(D, I, i, side, ruleKey, keepPath) {
-  const dist0 = entryDist(D, I, i, ruleKey);
-  const ext = side > 0 ? D.h[i] : D.l[i];
-  const stop = side > 0 ? ext - dist0 : ext + dist0;
-  return {i, j: i, side, rule: ruleKey, entry: D.c[i], dist0, ext, stop, hiMax: -Infinity, loMin: Infinity,
-          path: keepPath ? [stop] : null};
+/* 初始状态（用于预览与开仓）：返回 stop0、tp、dist0 */
+function initLevels(D, I, i, side, cfg) {
+  const c = normCfg(cfg), e = D.c[i], di = distInfo(D, I, i, c), L = side > 0;
+  const ext = c.ref === 'high' ? (L ? D.h[i] : D.l[i]) : e;
+  let stop;
+  if (c.type === 'fixed') stop = L ? e - di.dist0 : e + di.dist0;
+  else if (c.type === 'pct') stop = L ? ext - c.pct * ext : ext + c.pct * ext;
+  else stop = L ? ext - di.dist0 : ext + di.dist0;
+  let tp = null;
+  if (c.tpOn) { const off = c.tpUnit === 'R' ? c.tpV * di.dist0 : c.tpV * e; tp = L ? e + off : e - off; }
+  return {c, e, di, ext, stop, tp};
 }
-/* 前进一根；返回 true 表示本根收盘触发止损（以收盘价出场） */
+function newPos(D, I, i, side, cfg, keepPath) {
+  const q = initLevels(D, I, i, side, cfg), c = q.c;
+  return {i, j: i, side, cfg: c, entry: q.e, dist0: q.di.dist0, arr: q.di.arr, mult: q.di.mult, ext: q.ext, stop: q.stop, tp: q.tp,
+          LLa: c.donExit ? indArr(D, I, side > 0 ? 'LL' : 'HH', c.donExitN) : null,
+          hiMax: -Infinity, loMin: Infinity, exitPx: NaN, reason: '', path: keepPath ? [q.stop] : null};
+}
+function trailUpdate(D, p, j) {
+  const c = p.cfg;
+  if (c.type === 'fixed') return;
+  let dist;
+  if (p.side > 0) {
+    const r = c.ref === 'high' ? D.h[j] : D.c[j];
+    if (r > p.ext) p.ext = r;
+    dist = c.type === 'pct' ? c.pct * p.ext : (p.arr ? p.mult * p.arr[j] : p.dist0);
+    if (isFinite(dist)) p.stop = Math.max(p.stop, p.ext - dist);
+  } else {
+    const r = c.ref === 'high' ? D.l[j] : D.c[j];
+    if (r < p.ext) p.ext = r;
+    dist = c.type === 'pct' ? c.pct * p.ext : (p.arr ? p.mult * p.arr[j] : p.dist0);
+    if (isFinite(dist)) p.stop = Math.min(p.stop, p.ext + dist);
+  }
+}
+/* 前进一根；返回 true 表示本根出场（p.exitPx / p.reason） */
 function stepPos(D, I, p) {
   const j = p.j + 1; p.j = j;
-  const r = RULES[p.rule], hj = D.h[j], lj = D.l[j], cj = D.c[j];
+  const c = p.cfg, L = p.side > 0, hj = D.h[j], lj = D.l[j], cj = D.c[j], oj = D.o[j];
   if (hj > p.hiMax) p.hiMax = hj;
   if (lj < p.loMin) p.loMin = lj;
-  let hit;
-  if (p.side > 0) {
-    if (hj > p.ext) p.ext = hj;
-    if (r.type === 'atr') { const a = I.atr[j]; if (isFinite(a)) p.stop = Math.max(p.stop, p.ext - r.k * a); }
-    else p.stop = p.ext - p.dist0;
-    hit = cj <= p.stop;
+  let hit = false;
+  const don = p.LLa ? p.LLa[j] : NaN;
+  if (c.trig === 'intra') {
+    let lvl = p.stop, rs = 'stop';
+    if (isFinite(don) && (L ? don > lvl : don < lvl)) { lvl = don; rs = 'donchian'; }
+    if (L ? lj <= lvl : hj >= lvl) { hit = true; p.exitPx = L ? (oj <= lvl ? oj : lvl) : (oj >= lvl ? oj : lvl); p.reason = rs; }
+    else if (p.tp !== null && (L ? hj >= p.tp : lj <= p.tp)) { hit = true; p.exitPx = L ? (oj >= p.tp ? oj : p.tp) : (oj <= p.tp ? oj : p.tp); p.reason = 'tp'; }
+    if (!hit) trailUpdate(D, p, j);
   } else {
-    if (lj < p.ext) p.ext = lj;
-    if (r.type === 'atr') { const a = I.atr[j]; if (isFinite(a)) p.stop = Math.min(p.stop, p.ext + r.k * a); }
-    else p.stop = p.ext + p.dist0;
-    hit = cj >= p.stop;
+    trailUpdate(D, p, j);
+    if (L ? cj <= p.stop : cj >= p.stop) { hit = true; p.exitPx = cj; p.reason = 'stop'; }
+    else if (isFinite(don) && (L ? cj <= don : cj >= don)) { hit = true; p.exitPx = cj; p.reason = 'donchian'; }
+    else if (p.tp !== null && (L ? cj >= p.tp : cj <= p.tp)) { hit = true; p.exitPx = cj; p.reason = 'tp'; }
   }
+  if (!hit && c.maxHold > 0 && j - p.i >= c.maxHold) { hit = true; p.exitPx = cj; p.reason = 'maxhold'; }
   if (p.path) p.path.push(p.stop);
   return hit;
 }
+function retOf(p, x) { const e = p.entry; return (p.side > 0 ? x / e - 1 : 1 - x / e) - 2 * p.cfg.fee; }
 function finishPos(D, p, censored) {
-  const x = D.c[p.j], e = p.entry;
-  const ret = (p.side > 0 ? x / e - 1 : 1 - x / e) - 2 * FEE;
-  const R = ret / (p.dist0 / e);
+  const x = censored ? D.c[p.j] : p.exitPx, e = p.entry;
+  const ret = retOf(p, x), R = ret / (p.dist0 / e);
   const mfe = p.side > 0 ? p.hiMax / e - 1 : 1 - p.loMin / e;
   const mae = p.side > 0 ? p.loMin / e - 1 : 1 - p.hiMax / e;
-  return {side: p.side, rule: p.rule, i: p.i, j: p.j, tIn: D.t[p.i], tOut: D.t[p.j], pxIn: e, pxOut: x,
+  return {side: p.side, cfg: canonCfg(p.cfg), i: p.i, j: p.j, tIn: D.t[p.i], tOut: D.t[p.j], pxIn: e, pxOut: x,
           bars: p.j - p.i, days: (D.t[p.j] - D.t[p.i]) / 86400, ret, R, stopFrac: p.dist0 / e,
-          mfe: isFinite(mfe) ? Math.max(mfe, 0) : 0, mae: isFinite(mae) ? Math.min(mae, 0) : 0, cens: !!censored};
+          mfe: isFinite(mfe) ? Math.max(mfe, 0) : 0, mae: isFinite(mae) ? Math.min(mae, 0) : 0,
+          cens: !!censored, reason: censored ? 'end' : p.reason};
 }
-/* 从 i 入场一路模拟到出场（或数据末尾） */
-function simulate(D, I, i, side, ruleKey, keepPath) {
-  const p = newPos(D, I, i, side, ruleKey, keepPath);
+function simulate(D, I, i, side, cfg, keepPath) {
+  const p = newPos(D, I, i, side, cfg, keepPath);
   let cens = false;
   for (;;) {
     if (p.j >= D.n - 1) { cens = true; break; }
@@ -293,45 +411,71 @@ function simulate(D, I, i, side, ruleKey, keepPath) {
   if (keepPath) tr.path = p.path;
   return tr;
 }
-/* 每根都进基准（缓存） */
-function everyBar(D, I, side, ruleKey) {
+function everyBar(D, I, side, cfg) { // 全量（验证用）
   const n = D.n, exitJ = new Int32Array(n).fill(-1), ret = new Float64Array(n).fill(NaN), cens = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    if (!canEnter(D, I, i, ruleKey)) continue;
-    const tr = simulate(D, I, i, side, ruleKey, false);
+    if (!canEnter(D, I, i, cfg)) continue;
+    const tr = simulate(D, I, i, side, cfg, false);
     exitJ[i] = tr.j; ret[i] = tr.ret; cens[i] = tr.cens ? 1 : 0;
   }
   return {exitJ, ret, cens};
 }
+/* 增量“每根都进”基准：只推进到当前 cursor，不触碰未来 */
+function ebNew(D, side, cfg, start) { return {side, cfg: normCfg(cfg), j: start - 1, act: [], sum: 0, n: 0}; }
+function ebCatch(D, I, E, cursor) {
+  for (let j = E.j + 1; j <= cursor; j++) {
+    const act = E.act; let w = 0;
+    for (let q = 0; q < act.length; q++) {
+      const p = act[q];
+      if (stepPos(D, I, p)) { E.sum += retOf(p, p.exitPx); E.n++; } else act[w++] = p;
+    }
+    act.length = w;
+    if (canEnter(D, I, j, E.cfg)) act.push(newPos(D, I, j, E.side, E.cfg, false));
+    E.j = j;
+  }
+}
 
-/* ================= 状态 ================= */
+/* ================= UI ================= */
+const ASSETS = [
+  ['BTCUSDT', '比特币 BTCUSDT', 2, 1], ['ETHUSDT', '以太坊 ETHUSDT', 2, 1],
+  ['XAUUSD', '黄金 XAUUSD', 2, 0], ['XAGUSD', '白银 XAGUSD', 3, 0],
+  ['WTI', 'WTI 原油', 2, 0], ['BRENT', '布伦特原油 BRENT', 2, 0],
+  ['NAS100', '纳指100 NAS100', 1, 0], ['SPX500', '标普500 SPX500', 1, 0],
+  ['EURUSD', '欧元美元 EURUSD', 5, 0], ['USDJPY', '美元日元 USDJPY', 3, 0],
+];
+const REASON_CN = {stop: '止损出场', tp: '止盈出场', maxhold: '到期平仓', donchian: '唐奇安出场', end: '未平仓'};
 const $ = id => document.getElementById(id);
 const S = {asset: 'BTCUSDT', tf: '4h', D: null, I: null, start: 0, cursor: 0, trades: [], pos: null, last: null,
-           cache: {}, eb: {}, playing: false, modalTrade: null, busy: false};
-const ST = {ovEwma: false, ovBB: false, ovAtr: true, ovLog: null, rule: 'atr3', jump: true, tz: 0, color: 'gu', speed: 10};
-let chart, cs, sEw12, sEw48, sBBu, sBBm, sBBl, sStop, entryLine = null, stopLine = null;
+           cache: {}, ebS: {}, playing: false, modalTrade: null, customPresets: []};
+const ST = {ovEwma: false, ovBB: false, ovAtr: true, ovLog: null, jump: true, tz: 0, color: 'gu', speed: 10, cfg: null};
+let chart, cs, sEw12, sEw48, sBBu, sBBm, sBBl, sStop, entryLine = null, tpLine = null, previewLines = [];
 const fmtN = (x, d) => isFinite(x) ? x.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}) : '–';
 const pct = (x, d = 2) => isFinite(x) ? (x >= 0 ? '+' : '') + (x * 100).toFixed(d) + '%' : '–';
 const pdOf = () => ASSETS.find(a => a[0] === S.asset)[2];
+const allPresets = () => BUILTIN.concat(S.customPresets);
 function fmtT(t, withTz) {
   const d = new Date((t + ST.tz * 3600) * 1000), p = x => String(x).padStart(2, '0');
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` + (withTz ? (ST.tz ? ' 北京' : ' UTC') : '');
 }
 const cls = x => x > 0 ? 'up' : x < 0 ? 'dn' : '';
-const ct = t => t + ST.tz * 3600; // 图表时间（按所选时区平移）
+const ct = t => t + ST.tz * 3600;
+const tradeName = t => cfgName(t.cfg, allPresets());
 
 /* ================= 存取 ================= */
 const keyOf = () => `tradegame_v1_${S.asset}_${S.tf}`;
 function saveProgress() {
-  try {
-    localStorage.setItem(keyOf(), JSON.stringify({cursor: S.cursor, trades: S.trades,
-      pos: S.pos ? {i: S.pos.i, side: S.pos.side, rule: S.pos.rule} : null}));
-  } catch (e) {}
+  try { localStorage.setItem(keyOf(), JSON.stringify({cursor: S.cursor, trades: S.trades, pos: S.pos ? {i: S.pos.i, side: S.pos.side, cfg: canonCfg(S.pos.cfg)} : null})); } catch (e) {}
 }
 function saveSettings() { try { localStorage.setItem('tradegame_v1_settings', JSON.stringify(Object.assign({}, ST, {asset: S.asset, tf: S.tf}))); } catch (e) {} }
 function loadSettings() {
-  try { const s = JSON.parse(localStorage.getItem('tradegame_v1_settings') || 'null'); if (s) { Object.assign(ST, s); if (s.asset) S.asset = s.asset; if (s.tf) S.tf = s.tf; } } catch (e) {}
+  try {
+    const s = JSON.parse(localStorage.getItem('tradegame_v1_settings') || 'null');
+    if (s) { Object.assign(ST, s); if (s.asset) S.asset = s.asset; if (s.tf) S.tf = s.tf; if (s.rule && !s.cfg) ST.cfg = BUILTIN[LEGACY_RULE[s.rule] || 0].cfg; }
+    S.customPresets = JSON.parse(localStorage.getItem('tradegame_v2_presets') || '[]');
+  } catch (e) {}
+  ST.cfg = normCfg(ST.cfg || BUILTIN[0].cfg);
 }
+const savePresets = () => { try { localStorage.setItem('tradegame_v2_presets', JSON.stringify(S.customPresets)); } catch (e) {} };
 
 /* ================= 图表 ================= */
 function colors() { return ST.color === 'gu' ? {up: '#26a69a', dn: '#ef5350'} : {up: '#ef5350', dn: '#26a69a'}; }
@@ -346,8 +490,7 @@ function initChart() {
     autoSize: true,
     layout: {background: {type: 'solid', color: '#0e1217'}, textColor: '#aab4c0', fontSize: 12},
     grid: {vertLines: {color: '#1a212a'}, horzLines: {color: '#1a212a'}},
-    crosshair: {mode: 0},
-    rightPriceScale: {borderColor: '#2a323d'},
+    crosshair: {mode: 0}, rightPriceScale: {borderColor: '#2a323d'},
     timeScale: {borderColor: '#2a323d', timeVisible: true, secondsVisible: false, rightOffset: 6},
     localization: {timeFormatter: t => { const d = new Date(t * 1000), p = x => String(x).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`; }},
   });
@@ -362,7 +505,7 @@ function ptsFrom(arr, from, to) { const out = []; for (let i = from; i <= to; i+
 function candle(i) { const D = S.D; return {time: ct(D.t[i]), open: D.o[i], high: D.h[i], low: D.l[i], close: D.c[i]}; }
 function setPriceFmt() { const p = pdOf(); cs.applyOptions({priceFormat: {type: 'price', precision: p, minMove: Math.pow(10, -p)}}); }
 function resetSeries() {
-  const D = S.D, I = S.I, c = S.cursor, arr = [];
+  const I = S.I, c = S.cursor, arr = [];
   for (let i = 0; i <= c; i++) arr.push(candle(i));
   cs.setData(arr);
   sEw12.setData(ST.ovEwma ? ptsFrom(I.e12, 0, c) : []); sEw48.setData(ST.ovEwma ? ptsFrom(I.e48, 0, c) : []);
@@ -377,8 +520,7 @@ function updateSeries(i) {
   if (S.pos && S.pos.path && i > S.pos.i && S.pos.path[i - S.pos.i] !== undefined) sStop.update({time: t, value: S.pos.path[i - S.pos.i]});
 }
 function refreshStopSeries() {
-  const D = S.D;
-  let src = null;
+  const D = S.D; let src = null;
   if (S.pos && S.pos.path) src = {i: S.pos.i, path: S.pos.path};
   else if (S.last && S.last.path) src = {i: S.last.i, path: S.last.path};
   if (!src) { sStop.setData([]); return; }
@@ -386,32 +528,45 @@ function refreshStopSeries() {
   for (let q = 0; q < src.path.length; q++) out.push({time: ct(D.t[src.i + q]), value: src.path[q]});
   sStop.setData(out);
 }
+function mkMarker(time, L) { return {time, position: L ? 'belowBar' : 'aboveBar', color: L ? '#4da3ff' : '#ffa94d', shape: L ? 'arrowUp' : 'arrowDown', text: L ? '多' : '空'}; }
 function refreshMarkers() {
   const D = S.D, c = colors(), ms = [];
   for (const tr of S.trades) {
-    const L = tr.side > 0;
-    ms.push({time: ct(tr.tIn), position: L ? 'belowBar' : 'aboveBar', color: L ? '#4da3ff' : '#ffa94d', shape: L ? 'arrowUp' : 'arrowDown', text: L ? '多' : '空'});
-    ms.push({time: ct(tr.tOut), position: 'inBar', color: tr.ret >= 0 ? c.up : c.dn, shape: 'circle', text: (tr.cens ? '未平仓 ' : '') + pct(tr.ret, 1)});
+    ms.push(mkMarker(ct(tr.tIn), tr.side > 0));
+    const tag = tr.cens ? '未平仓 ' : (tr.reason === 'tp' ? '止盈 ' : tr.reason === 'maxhold' ? '到期 ' : tr.reason === 'donchian' ? '唐奇安 ' : '');
+    ms.push({time: ct(tr.tOut), position: 'inBar', color: tr.ret >= 0 ? c.up : c.dn, shape: 'circle', text: tag + pct(tr.ret, 1)});
   }
-  if (S.pos) { const L = S.pos.side > 0; ms.push({time: ct(D.t[S.pos.i]), position: L ? 'belowBar' : 'aboveBar', color: L ? '#4da3ff' : '#ffa94d', shape: L ? 'arrowUp' : 'arrowDown', text: L ? '多' : '空'}); }
+  if (S.pos) ms.push(mkMarker(ct(D.t[S.pos.i]), S.pos.side > 0));
   ms.sort((a, b) => a.time - b.time);
   cs.setMarkers(ms);
 }
 function refreshLines() {
   if (entryLine) { cs.removePriceLine(entryLine); entryLine = null; }
-  const ref = S.pos ? {e: S.pos.entry, side: S.pos.side} : (S.last ? {e: S.last.pxIn, side: S.last.side} : null);
-  if (ref) entryLine = cs.createPriceLine({price: ref.e, color: ref.side > 0 ? '#4da3ff' : '#ffa94d', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '入场'});
+  if (tpLine) { cs.removePriceLine(tpLine); tpLine = null; }
+  const ref = S.pos ? {e: S.pos.entry, side: S.pos.side, tp: S.pos.tp} : (S.last ? {e: S.last.pxIn, side: S.last.side, tp: S.last.tp} : null);
+  if (ref) {
+    entryLine = cs.createPriceLine({price: ref.e, color: ref.side > 0 ? '#4da3ff' : '#ffa94d', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '入场'});
+    if (ref.tp !== null && ref.tp !== undefined && isFinite(ref.tp)) tpLine = cs.createPriceLine({price: ref.tp, color: '#7bd88f', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: '止盈'});
+  }
+  refreshPreview();
+}
+/* 下单前预览：多/空初始止损线、止盈线（持仓时隐藏） */
+function refreshPreview() {
+  for (const l of previewLines) cs.removePriceLine(l);
+  previewLines = [];
+  if (S.pos || !S.D || !canEnter(S.D, S.I, S.cursor, ST.cfg)) return;
+  for (const side of [1, -1]) {
+    const q = initLevels(S.D, S.I, S.cursor, side, ST.cfg), L = side > 0, col = L ? '#4da3ff' : '#ffa94d';
+    previewLines.push(cs.createPriceLine({price: q.stop, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: (L ? '多' : '空') + '初始止损'}));
+    if (q.tp !== null) previewLines.push(cs.createPriceLine({price: q.tp, color: '#7bd88f', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: (L ? '多' : '空') + '止盈'}));
+  }
 }
 function applyScale() { chart.priceScale('right').applyOptions({mode: ST.ovLog ? 1 : 0}); }
-function focusRange(i, j) {
-  const span = Math.max(j - i, 10);
-  chart.timeScale().setVisibleLogicalRange({from: Math.max(-3, i - Math.max(40, span * 0.35)), to: j + Math.max(10, span * 0.12)});
-}
+function focusRange(i, j) { const span = Math.max(j - i, 10); chart.timeScale().setVisibleLogicalRange({from: Math.max(-3, i - Math.max(40, span * 0.35)), to: j + Math.max(10, span * 0.12)}); }
 function tail(nbars) { chart.timeScale().setVisibleLogicalRange({from: S.cursor - nbars, to: S.cursor + 8}); }
 
 /* ================= 回放推进 ================= */
 function advance(target) {
-  if (S.busy) return; // 防重入
   const D = S.D, I = S.I, from = S.cursor;
   target = Math.min(target, D.n - 1);
   if (target <= from) return;
@@ -419,14 +574,13 @@ function advance(target) {
   for (let j = from + 1; j <= target; j++) {
     S.cursor = j;
     if (S.pos) {
-      const hit = stepPos(D, I, S.pos);
-      if (hit) { closed = closePos(false); break; }
+      if (stepPos(D, I, S.pos)) { closed = closePos(false); break; }
       if (j === D.n - 1) { closed = closePos(true); break; }
     }
   }
   const to = S.cursor;
   if (closed || to - from > 300) resetSeries();
-  else for (let j = from + 1; j <= to; j++) updateSeries(j);
+  else { for (let j = from + 1; j <= to; j++) updateSeries(j); refreshPreview(); }
   if (closed) { refreshMarkers(); S.playing && stopPlay(); }
   afterMove(closed);
 }
@@ -434,43 +588,39 @@ function closePos(cens) {
   const p = S.pos, tr = finishPos(S.D, p, cens);
   tr.id = S.trades.length + 1;
   S.trades.push(tr);
-  S.last = Object.assign({path: p.path}, tr);
+  S.last = Object.assign({path: p.path, tp: p.tp}, tr);
   S.pos = null;
   return tr;
 }
 function afterMove(closedTrade) {
   saveProgress(); renderAll();
   if (closedTrade) { if (S.cursor - closedTrade.i > 3) focusRange(closedTrade.i, closedTrade.j); showResult(closedTrade); }
-  else if (S.cursor === S.D.n - 1) { stopPlay(); }
+  else if (S.cursor === S.D.n - 1) stopPlay();
 }
 
 /* ================= 下单 ================= */
+const modalOpen = () => $('mask').style.display === 'flex' || $('mask2').style.display === 'flex';
 function orderBlock() {
   if (S.pos) return '已有持仓';
   if (S.cursor >= S.D.n - 1) return '已到数据末尾';
   if (!(S.D.t[S.cursor] >= ENTRY_START)) return '尚未到起点';
-  if (!canEnter(S.D, S.I, S.cursor, ST.rule)) return '指标预热中（需 20 根K线）';
-  if ($('mask').style.display === 'flex') return '请先关闭结果窗口';
+  if (!canEnter(S.D, S.I, S.cursor, ST.cfg)) return '指标预热中或止损距离无效';
+  if (modalOpen()) return '请先关闭弹窗';
   return '';
 }
 function placeOrder(side) {
   const why = orderBlock(); if (why) { $('orderMsg').textContent = '无法下单：' + why; return; }
   stopPlay();
   const D = S.D, I = S.I, i = S.cursor;
-  const p = newPos(D, I, i, side, ST.rule, true);
+  const p = newPos(D, I, i, side, ST.cfg, true);
   S.pos = p;
   if (ST.jump) {
     let cens = false;
-    for (;;) {
-      if (p.j >= D.n - 1) { cens = true; break; }
-      if (stepPos(D, I, p)) break;
-    }
+    for (;;) { if (p.j >= D.n - 1) { cens = true; break; } if (stepPos(D, I, p)) break; }
     S.cursor = p.j;
     const tr = closePos(cens);
     resetSeries(); afterMove(tr);
-  } else {
-    refreshMarkers(); refreshStopSeries(); refreshLines(); saveProgress(); renderAll();
-  }
+  } else { refreshMarkers(); refreshStopSeries(); refreshLines(); saveProgress(); renderAll(); }
 }
 
 /* ================= 播放 ================= */
@@ -495,6 +645,28 @@ function renderControls() {
   ['btnNext', 'btnN10', 'btnN50', 'btnN200', 'btnPlay'].forEach(id => $(id).disabled = end);
   $('slider').value = S.cursor;
 }
+function presetOptions() {
+  const cur = cfgKey(ST.cfg), ps = allPresets(), idx = ps.findIndex(p => cfgKey(p.cfg) === cur);
+  $('selPreset').innerHTML = ps.map((p, k) => `<option value="${k}">${p.name}</option>`).join('') + '<option value="-1">自定义（未保存）</option>';
+  $('selPreset').value = idx >= 0 ? idx : -1;
+}
+function renderPreview() {
+  const D = S.D, I = S.I, c = S.cursor, pd = pdOf(), cf = ST.cfg;
+  $('cfgSummary').textContent = describeCfg(cf);
+  if (!canEnter(D, I, c, cf)) { $('stopPrev').innerHTML = kvHtml([['初始止损预览', '预热中/无效']]); return; }
+  const e = D.c[c], rows = [];
+  for (const side of [1, -1]) {
+    const q = initLevels(D, I, c, side, cf), dd = Math.abs(e - q.stop) / e, L = side > 0;
+    rows.push([`${L ? '多' : '空'}单初始止损`, `${fmtN(q.stop, pd)}（${(dd * 100).toFixed(2)}%）`]);
+    if (q.tp !== null) rows.push([`${L ? '多' : '空'}单止盈`, `${fmtN(q.tp, pd)}（${(Math.abs(q.tp - e) / e * 100).toFixed(2)}%）`]);
+  }
+  rows.push(['止损距离 dist0（R 分母）', `${(entryDist(D, I, c, cf) / e * 100).toFixed(2)}%`]);
+  if (cf.donExit) {
+    const LL = indArr(D, I, 'LL', cf.donExitN)[c], HH = indArr(D, I, 'HH', cf.donExitN)[c];
+    rows.push(['唐奇安出场位（多/空，随下一根）', `${fmtN(LL, pd)} / ${fmtN(HH, pd)}`]);
+  }
+  $('stopPrev').innerHTML = kvHtml(rows);
+}
 function renderAll() {
   const D = S.D, I = S.I, c = S.cursor, pd = pdOf();
   renderControls();
@@ -509,32 +681,24 @@ function renderAll() {
     ['EWMA12 / 48', isFinite(I.e48[c]) ? `${fmtN(I.e12[c], pd)} / ${fmtN(I.e48[c], pd)}` : '预热中'],
     ['快线相对慢线', isFinite(I.e48[c]) ? (I.e12[c] > I.e48[c] ? '快线在上' : '快线在下') : '–'],
   ]);
-  // 止损预览
-  const pv = [];
-  for (const k of ['atr3', 'bb075', 'bb1']) {
-    const ok = canEnter(D, I, c, k);
-    pv.push([RULES[k].label + ' 初始止损距离', ok ? `${(entryDist(D, I, c, k) / D.c[c] * 100).toFixed(2)}%` : '–']);
-  }
-  $('stopPrev').innerHTML = kvHtml(pv);
+  presetOptions(); renderPreview();
   const why = orderBlock();
   $('btnLong').disabled = $('btnShort').disabled = !!why;
   $('orderMsg').textContent = why ? '当前不可下单：' + why : '';
-  // 持仓
   const pc = $('posCard');
   if (S.pos) {
-    const p = S.pos, x = D.c[c], e = p.entry;
-    const fl = (p.side > 0 ? x / e - 1 : 1 - x / e) - 2 * FEE;
+    const p = S.pos, x = D.c[c], e = p.entry, fl = retOf(p, x);
     pc.style.display = '';
     $('posInfo').innerHTML = kvHtml([
-      ['方向 / 规则', `${p.side > 0 ? '做多' : '做空'} · ${RULES[p.rule].label}`], ['入场价', fmtN(e, pd)],
+      ['方向 / 配置', `${p.side > 0 ? '做多' : '做空'} · ${cfgName(p.cfg, allPresets())}`], ['入场价', fmtN(e, pd)],
       ['当前止损线', fmtN(p.stop, pd)], ['距止损', pct(Math.abs(x - p.stop) / x, 2)],
-      ['已持仓', `${p.j - p.i} 根`], ['浮动净收益', pct(fl), cls(fl)],
+      ['止盈位', p.tp !== null ? fmtN(p.tp, pd) : '关'],
+      ['已持仓', `${p.j - p.i} 根${p.cfg.maxHold > 0 ? ' / 最长 ' + p.cfg.maxHold : ''}`], ['浮动净收益', pct(fl), cls(fl)],
       ['浮动 R', (fl / (p.dist0 / e)).toFixed(2) + ' R', cls(fl)],
     ]);
   } else pc.style.display = 'none';
   renderLegend(); renderStats(); renderTable();
-  const done = c >= D.n - 1 && !S.pos;
-  const bn = $('banner');
+  const done = c >= D.n - 1 && !S.pos, bn = $('banner');
   if (done) { bn.style.display = 'block'; bn.innerHTML = `🏁 已走完 ${S.asset} ${S.tf} 的全部历史。共 ${S.trades.length} 笔交易，可导出 CSV 或点“重新开始”再玩一遍。`; }
   else bn.style.display = 'none';
 }
@@ -546,78 +710,80 @@ function renderLegend() {
   if (ST.ovBB) h += `<br><span style="color:#8aa4c4">BB(20,2) 上 ${fmtN(I.up[c], pd)} 中 ${fmtN(I.mid[c], pd)} 下 ${fmtN(I.lo[c], pd)}</span>`;
   $('legend').innerHTML = h;
 }
-function getEB(side, rule) {
-  const k = `${S.asset}|${S.tf}|${side}|${rule}`;
-  if (!S.eb[k]) S.eb[k] = everyBar(S.D, S.I, side, rule);
-  return S.eb[k];
+/* “每根都进”基准：增量推进到当前 cursor（只用已揭示的K线，不碰未来），按（配置，方向）缓存 */
+function ebMean(cfg, side) {
+  const k = cfgKey(cfg) + '|' + side;
+  if (!S.ebS[k]) S.ebS[k] = ebNew(S.D, side, cfg, S.start);
+  const E = S.ebS[k]; ebCatch(S.D, S.I, E, S.cursor);
+  return {mean: E.n ? E.sum / E.n : NaN, n: E.n};
 }
-function ebMean(side, rule) { // 已揭示（出场 ≤ 当前）且非截尾的“每根都进”平均单笔
-  const E = getEB(side, rule), c = S.cursor; let s = 0, n = 0;
-  for (let i = S.start; i < S.D.n; i++) { const j = E.exitJ[i]; if (j >= 0 && j <= c && !E.cens[i]) { s += E.ret[i]; n++; } }
-  return {mean: n ? s / n : NaN, n};
-}
+function chips(rows) { return rows.map(r => r[1] === '' ? `<div class="chip head">${r[0]}</div>` : `<div class="chip"><span>${r[0]}</span><b class="${r[2] || ''}">${r[1]}</b></div>`).join(''); }
 let statsTimer = null;
 function renderStats() { clearTimeout(statsTimer); statsTimer = setTimeout(renderStatsNow, 60); }
-function chips(rows) {
-  return rows.map(r => r[1] === '' ? `<div class="chip head">${r[0]}</div>` : `<div class="chip"><span>${r[0]}</span><b class="${r[2] || ''}">${r[1]}</b></div>`).join('');
+function groupStats(T) {
+  const n = T.length, wins = T.filter(t => t.ret > 0).length, avg = T.reduce((a, t) => a + t.ret, 0) / n, avgR = T.reduce((a, t) => a + t.R, 0) / n;
+  let cum = 1; for (const t of T) cum *= 1 + t.ret;
+  let ebw = 0, ok = true;
+  const combos = {}; for (const t of T) { const k = cfgKey(t.cfg) + '|' + t.side; combos[k] = combos[k] || {cfg: t.cfg, side: t.side, c: 0}; combos[k].c++; }
+  for (const k in combos) { const m = ebMean(combos[k].cfg, combos[k].side); if (!isFinite(m.mean)) ok = false; else ebw += m.mean * combos[k].c; }
+  return {n, wins, avg, avgR, cum: cum - 1, eb: ok ? ebw / n : NaN};
 }
 function renderStatsNow() {
   const D = S.D, T = S.trades, c = S.cursor;
-  const bh = D.c[c] / D.c[S.start] - 1 - 2 * FEE;
+  const bh = D.c[c] / D.c[S.start] - 1 - 2 * ST.cfg.fee;
   const rows = [];
   if (!T.length) {
-    rows.push(['交易笔数', '0']);
-    rows.push(['买入持有（起点→当前）', pct(bh), cls(bh)]);
-    $('stats').innerHTML = chips(rows);
+    $('stats').innerHTML = chips([['交易笔数', '0'], ['买入持有（起点→当前）', pct(bh), cls(bh)]]);
     $('sumLine').innerHTML = kvHtml([['交易笔数', '0'], ['买入持有（起点→当前）', pct(bh), cls(bh)]]); return;
   }
-  const n = T.length, wins = T.filter(t => t.ret > 0).length;
-  const avg = T.reduce((a, t) => a + t.ret, 0) / n, avgR = T.reduce((a, t) => a + t.R, 0) / n;
-  let cum = 1; for (const t of T) cum *= 1 + t.ret;
-  const sum = T.reduce((a, t) => a + t.ret, 0);
-  const combos = {}; for (const t of T) { const k = t.side + '|' + t.rule; combos[k] = (combos[k] || 0) + 1; }
-  let ebw = 0, ok = true;
-  for (const k in combos) { const [s, r] = k.split('|'); const m = ebMean(+s, r); if (!isFinite(m.mean)) { ok = false; continue; } ebw += m.mean * combos[k]; }
-  const ebAvg = ok ? ebw / n : NaN;
-  const bh2 = D.c[c] / T[0].pxIn - 1 - 2 * FEE;
-  rows.push(['你的成绩', ''],
-    ['交易笔数', `${n}（胜 ${wins} / 负 ${n - wins}）`], ['胜率', (wins / n * 100).toFixed(1) + '%'],
-    ['平均单笔净收益', pct(avg), cls(avg)], ['平均 R', avgR.toFixed(2), cls(avgR)],
-    ['累计收益（复利）', pct(cum - 1), cls(cum - 1)], ['累计收益（单利加总）', pct(sum), cls(sum)],
+  const G = groupStats(T), n = G.n, sum = T.reduce((a, t) => a + t.ret, 0);
+  const bh2 = D.c[c] / T[0].pxIn - 1 - 2 * ST.cfg.fee;
+  rows.push(['你的成绩（全部配置合计）', ''],
+    ['交易笔数', `${n}（胜 ${G.wins} / 负 ${n - G.wins}）`], ['胜率', (G.wins / n * 100).toFixed(1) + '%'],
+    ['平均单笔净收益', pct(G.avg), cls(G.avg)], ['平均 R', G.avgR.toFixed(2), cls(G.avgR)],
+    ['累计收益（复利）', pct(G.cum), cls(G.cum)], ['累计收益（单利加总）', pct(sum), cls(sum)],
     ['最好 / 最差一笔', `${pct(Math.max(...T.map(t => t.ret)), 1)} / ${pct(Math.min(...T.map(t => t.ret)), 1)}`]);
   const split = (name, f) => { const a = T.filter(f); if (a.length) rows.push([name, `${a.length} 笔 · 均 ${pct(a.reduce((s, t) => s + t.ret, 0) / a.length)}`]); };
   split('样本内（入场≤2020）', t => t.tIn < IS_END); split('样本外（入场≥2021）', t => t.tIn >= IS_END);
-  rows.push(['对比基准', ''],
-    ['买入持有（起点→当前）', pct(bh), cls(bh)], ['买入持有（首笔入场→当前）', pct(bh2), cls(bh2)],
-    ['同规则“每根都进”平均单笔', isFinite(ebAvg) ? pct(ebAvg) : '–', cls(ebAvg)]);
-  if (isFinite(ebAvg)) { const d = avg - ebAvg; rows.push(['你 − 基准（每笔）', pct(d), cls(d)]); }
-  rows.push(['基准 = 与你各笔相同方向+止损规则，从起点到当前、已经出场的每根K线收盘入场的平均净收益（不含未出场/未平仓，不泄露未来）；买入持有已扣双边费用。', '']);
-  $('stats').innerHTML = chips(rows);
-  $('sumLine').innerHTML = kvHtml([['交易笔数 / 胜率', `${n} / ${(wins / n * 100).toFixed(0)}%`], ['平均单笔', pct(avg), cls(avg)], ['累计（复利）', pct(cum - 1), cls(cum - 1)],
-    ['同规则每根都进均值', isFinite(ebAvg) ? pct(ebAvg) : '–', cls(ebAvg)], ['买入持有（起点→当前）', pct(bh), cls(bh)]]);
+  rows.push(['对比基准', ''], ['买入持有（起点→当前）', pct(bh), cls(bh)], ['买入持有（首笔入场→当前）', pct(bh2), cls(bh2)],
+    ['同配置“每根都进”平均单笔（按你的配置/方向加权）', isFinite(G.eb) ? pct(G.eb) : '–', cls(G.eb)]);
+  if (isFinite(G.eb)) rows.push(['你 − 基准（每笔）', pct(G.avg - G.eb), cls(G.avg - G.eb)]);
+  rows.push(['基准 = 与你各笔相同配置+方向，从起点到当前、已经出场的每根K线收盘入场的平均净收益（增量计算，只用已揭示K线；不含未平仓）；买入持有已扣双边费用。', '']);
+  // 按配置分组
+  const groups = {};
+  for (const t of T) { const k = cfgKey(t.cfg); (groups[k] = groups[k] || []).push(t); }
+  let gh = '<div class="chip head">按配置分组</div><table style="grid-column:1/-1"><thead><tr><th>配置</th><th>笔数</th><th>胜率</th><th>平均单笔</th><th>平均R</th><th>累计(复利)</th><th>每根都进基准</th><th>你−基准</th></tr></thead><tbody>';
+  for (const k in groups) {
+    const a = groups[k], g = groupStats(a), nm = tradeName(a[0]);
+    gh += `<tr><td title="${describeCfg(a[0].cfg)}">${nm}</td><td>${g.n}</td><td>${(g.wins / g.n * 100).toFixed(0)}%</td><td class="${cls(g.avg)}">${pct(g.avg)}</td><td class="${cls(g.avgR)}">${g.avgR.toFixed(2)}</td><td class="${cls(g.cum)}">${pct(g.cum)}</td><td>${isFinite(g.eb) ? pct(g.eb) : '–'}</td><td class="${cls(g.avg - g.eb)}">${isFinite(g.eb) ? pct(g.avg - g.eb) : '–'}</td></tr>`;
+  }
+  gh += '</tbody></table>';
+  $('stats').innerHTML = gh + chips(rows);
+  $('sumLine').innerHTML = kvHtml([['交易笔数 / 胜率', `${n} / ${(G.wins / n * 100).toFixed(0)}%`], ['平均单笔', pct(G.avg), cls(G.avg)], ['累计（复利）', pct(G.cum), cls(G.cum)],
+    ['同配置每根都进均值', isFinite(G.eb) ? pct(G.eb) : '–', cls(G.eb)], ['买入持有（起点→当前）', pct(bh), cls(bh)]]);
 }
 function renderTable() {
   const pd = pdOf(), T = S.trades;
   $('tradeCount').textContent = `（${T.length} 笔）`;
-  $('tbody').innerHTML = T.slice().reverse().map(t => `<tr><td>${t.id}</td><td><span class="tag ${t.side > 0 ? 'long' : 'short'}">${t.side > 0 ? '多' : '空'}</span></td><td>${RULES[t.rule].label}</td>` +
+  $('tbody').innerHTML = T.slice().reverse().map(t => `<tr><td>${t.id}</td><td><span class="tag ${t.side > 0 ? 'long' : 'short'}">${t.side > 0 ? '多' : '空'}</span></td><td title="${describeCfg(t.cfg)}">${tradeName(t)}</td>` +
     `<td>${fmtT(t.tIn)}</td><td>${fmtN(t.pxIn, pd)}</td><td>${fmtT(t.tOut)}</td><td>${fmtN(t.pxOut, pd)}</td><td>${t.bars}</td><td>${t.days.toFixed(1)}</td>` +
-    `<td class="${cls(t.ret)}">${pct(t.ret)}</td><td class="${cls(t.R)}">${t.R.toFixed(2)}</td><td class="up">${pct(t.mfe)}</td><td class="dn">${pct(t.mae)}</td><td>${t.cens ? '<span class="tag cens">未平仓</span>' : '止损出场'}</td></tr>`).join('');
+    `<td class="${cls(t.ret)}">${pct(t.ret)}</td><td class="${cls(t.R)}">${t.R.toFixed(2)}</td><td class="up">${pct(t.mfe)}</td><td class="dn">${pct(t.mae)}</td><td>${t.cens ? '<span class="tag cens">未平仓</span>' : (REASON_CN[t.reason] || t.reason)}</td></tr>`).join('');
 }
 
 /* ================= 结果弹窗 ================= */
 function showResult(t) {
-  const pd = pdOf(), D = S.D;
-  const hold = D.c[t.j] / D.c[t.i] - 1;
+  const pd = pdOf(), D = S.D, hold = D.c[t.j] / D.c[t.i] - 1;
   S.modalTrade = t;
   $('modal').innerHTML = `
-    <h2>第 ${t.id} 笔 · ${t.side > 0 ? '做多' : '做空'} <span class="tag ${t.side > 0 ? 'long' : 'short'}">${RULES[t.rule].label}</span>${t.cens ? '<span class="tag cens">未平仓（数据结束，按最后收盘计）</span>' : ''}</h2>
+    <h2>第 ${t.id} 笔 · ${t.side > 0 ? '做多' : '做空'} <span class="tag ${t.side > 0 ? 'long' : 'short'}">${tradeName(t)}</span>${t.cens ? '<span class="tag cens">未平仓（数据结束，按最后收盘计）</span>' : `<span class="tag cens">${REASON_CN[t.reason]}</span>`}</h2>
+    <div class="dim" style="font-size:11px;margin-bottom:2px">${describeCfg(t.cfg)}</div>
     <div class="big ${cls(t.ret)}">${pct(t.ret)} <span style="font-size:16px">（${t.R.toFixed(2)} R）</span></div>
     <div class="kv">
       <span>入场</span><span>${fmtT(t.tIn, true)} @ ${fmtN(t.pxIn, pd)}</span>
       <span>出场</span><span>${fmtT(t.tOut, true)} @ ${fmtN(t.pxOut, pd)}</span>
       <span>持仓</span><span>${t.bars} 根 ≈ ${t.days.toFixed(1)} 天</span>
       <span>入场止损距离</span><span>${(t.stopFrac * 100).toFixed(2)}%</span>
-      <span>净收益（含双边 0.04%）</span><span class="${cls(t.ret)}">${pct(t.ret, 3)}</span>
+      <span>净收益（含双边 ${(t.cfg.fee * 200).toFixed(3)}%）</span><span class="${cls(t.ret)}">${pct(t.ret, 3)}</span>
       <span>R 倍数（净收益/止损距离）</span><span class="${cls(t.R)}">${t.R.toFixed(3)}</span>
       <span>持仓期最大浮盈（价格口径，不含费用）</span><span class="up">${pct(t.mfe)}</span>
       <span>持仓期最大浮亏（价格口径，不含费用）</span><span class="dn">${pct(t.mae)}</span>
@@ -633,50 +799,151 @@ function closeModal() { $('mask').style.display = 'none'; S.modalTrade = null; r
 /* ================= 导出 ================= */
 function exportCsv() {
   const pd = pdOf();
-  const head = ['编号', '品种', '周期', '方向', '止损规则', '入场时间(' + (ST.tz ? '北京' : 'UTC') + ')', '入场价', '出场时间', '出场价', '持仓bar数', '持仓天数', '净收益', 'R', '最大浮盈', '最大浮亏', '未平仓'];
-  const rows = S.trades.map(t => [t.id, S.asset, S.tf, t.side > 0 ? '多' : '空', RULES[t.rule].label, fmtT(t.tIn), t.pxIn.toFixed(pd), fmtT(t.tOut), t.pxOut.toFixed(pd), t.bars, t.days.toFixed(3), t.ret.toFixed(6), t.R.toFixed(4), t.mfe.toFixed(6), t.mae.toFixed(6), t.cens ? 1 : 0]);
+  const head = ['编号', '品种', '周期', '方向', '配置名', '入场时间(' + (ST.tz ? '北京' : 'UTC') + ')', '入场价', '出场时间', '出场价', '持仓bar数', '持仓天数', '净收益', 'R', '最大浮盈', '最大浮亏', '出场原因', '未平仓', '配置JSON'];
+  const q = s => '"' + String(s).replace(/"/g, '""') + '"';
+  const rows = S.trades.map(t => [t.id, S.asset, S.tf, t.side > 0 ? '多' : '空', q(tradeName(t)), fmtT(t.tIn), t.pxIn.toFixed(pd), fmtT(t.tOut), t.pxOut.toFixed(pd), t.bars, t.days.toFixed(3), t.ret.toFixed(6), t.R.toFixed(4), t.mfe.toFixed(6), t.mae.toFixed(6), REASON_CN[t.reason] || t.reason, t.cens ? 1 : 0, q(JSON.stringify(t.cfg))]);
   const csv = '\ufeff' + [head].concat(rows).map(r => r.join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
   a.download = `trades_${S.asset}_${S.tf}.csv`; document.body.appendChild(a); a.click(); a.remove();
 }
 
+/* ================= 止损配置面板 ================= */
+function num(id) { const v = $(id).value; return v === '' ? NaN : +v; }
+function writeForm(c) {
+  c = normCfg(c);
+  $('c_type').value = c.type; $('c_k').value = c.k; $('c_atrN').value = c.atrN; $('c_atrMode').value = c.atrMode;
+  $('c_m').value = c.m; $('c_bbN').value = c.bbN; $('c_bbSd').value = c.bbSd; $('c_bbMode').value = c.bbMode;
+  $('c_dm').value = c.dm; $('c_dN').value = c.dN; $('c_dMode').value = c.dMode;
+  $('c_pct').value = +(c.pct * 100).toFixed(6);
+  $('c_fixUnit').value = c.fixUnit; $('c_fixK').value = c.fixK; $('c_fixN').value = c.fixN; $('c_fixPct').value = +(c.fixPct * 100).toFixed(6);
+  $('c_ref').value = c.ref; $('c_trig').value = c.trig;
+  $('c_tpOn').checked = c.tpOn; $('c_tpUnit').value = c.tpUnit; $('c_tpV').value = c.tpUnit === 'R' ? c.tpV : +(c.tpV * 100).toFixed(6);
+  $('c_maxHold').value = c.maxHold; $('c_donExit').checked = c.donExit; $('c_donExitN').value = c.donExitN;
+  $('c_fee').value = +(c.fee * 100).toFixed(6);
+  showTypeGroups();
+}
+function showTypeGroups() {
+  const t = $('c_type').value;
+  for (const g of ['atr', 'bb', 'donch', 'pct', 'fixed']) $('g_' + g).style.display = g === t ? '' : 'none';
+  $('f_ref').style.display = t === 'fixed' ? 'none' : '';
+  $('g_fixK').style.display = $('c_fixUnit').value === 'atr' ? '' : 'none'; $('g_fixPct').style.display = $('c_fixUnit').value === 'atr' ? 'none' : '';
+}
+function readForm() {
+  const c = Object.assign({}, DEF), err = [];
+  c.type = $('c_type').value; c.k = num('c_k'); c.atrN = num('c_atrN'); c.atrMode = $('c_atrMode').value;
+  c.m = num('c_m'); c.bbN = num('c_bbN'); c.bbSd = num('c_bbSd'); c.bbMode = $('c_bbMode').value;
+  c.dm = num('c_dm'); c.dN = num('c_dN'); c.dMode = $('c_dMode').value;
+  c.pct = num('c_pct') / 100; c.fixUnit = $('c_fixUnit').value; c.fixK = num('c_fixK'); c.fixN = num('c_fixN'); c.fixPct = num('c_fixPct') / 100;
+  c.ref = $('c_ref').value; c.trig = $('c_trig').value;
+  c.tpOn = $('c_tpOn').checked; c.tpUnit = $('c_tpUnit').value; c.tpV = c.tpUnit === 'R' ? num('c_tpV') : num('c_tpV') / 100;
+  c.maxHold = num('c_maxHold') || 0; c.donExit = $('c_donExit').checked; c.donExitN = num('c_donExitN'); c.fee = num('c_fee') / 100;
+  const pos = (v, name) => { if (!(isFinite(v) && v > 0)) err.push(name + ' 需为正数'); };
+  const int = (v, name, mn = 2) => { if (!(Number.isInteger(v) && v >= mn)) err.push(name + ` 需为 ≥${mn} 的整数`); };
+  if (c.type === 'atr') { pos(c.k, 'ATR 倍数 k'); int(c.atrN, 'ATR 周期'); }
+  if (c.type === 'bb') { pos(c.m, '布林带倍数 m'); int(c.bbN, '布林带周期'); pos(c.bbSd, '标准差倍数'); }
+  if (c.type === 'donch') { pos(c.dm, '唐奇安倍数 m'); int(c.dN, '唐奇安周期'); }
+  if (c.type === 'pct') { pos(c.pct, '回撤百分比'); if (c.pct >= 1) err.push('回撤百分比需 <100%'); }
+  if (c.type === 'fixed') { if (c.fixUnit === 'atr') { pos(c.fixK, 'ATR 倍数'); int(c.fixN, 'ATR 周期'); } else { pos(c.fixPct, '固定止损百分比'); if (c.fixPct >= 1) err.push('固定止损需 <100%'); } }
+  if (c.tpOn) pos(c.tpV, '止盈数值');
+  if (!(Number.isInteger(c.maxHold) && c.maxHold >= 0)) err.push('最长持仓需为 ≥0 的整数（0=无限）');
+  if (c.donExit) int(c.donExitN, '唐奇安出场周期', 1);
+  if (!(isFinite(c.fee) && c.fee >= 0 && c.fee < 0.05)) err.push('费率需在 0–5% 之间');
+  return {cfg: c, err};
+}
+function buildCfgModal() {
+  const f = (id, label, v, step = 'any', min = '') => `<label>${label}<input type="number" id="${id}" step="${step}" ${min !== '' ? `min="${min}"` : ''} value="${v}"></label>`;
+  const sel = (id, opts, lab) => `<label>${lab}<select id="${id}">${opts.map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}</select></label>`;
+  const mode = [['cur', '随当前bar变化'], ['entry', '入场时固定']];
+  $('cfgModal').innerHTML = `
+  <h2>⚙ 止损配置 <span class="dim" style="font-size:12px;font-weight:400">修改即时生效，仅影响之后的新订单（已持仓/历史交易保留各自配置）</span></h2>
+  <div class="cfgsec"><h4>预设</h4><div class="frow">
+    <label>预设 <select id="p_sel" style="min-width:260px"></select></label><button id="p_load">加载</button>
+    <label>名称 <input type="text" id="p_name" placeholder="新预设名称"></label><button id="p_save">保存/覆盖</button><button id="p_del">删除</button></div>
+    <div class="dim" id="p_msg" style="margin-top:4px;min-height:16px"></div></div>
+  <div class="cfgsec"><h4>止损类型</h4><div class="frow"><label>类型 <select id="c_type">
+    <option value="atr">ATR 吊灯（移动）</option><option value="bb">布林带宽（移动）</option><option value="donch">唐奇安通道宽度（移动）</option>
+    <option value="pct">百分比移动止损（从最高点回撤 x%）</option><option value="fixed">固定止损（不移动）</option></select></label>
+    <span id="f_ref">${sel('c_ref', [['high', '最高High（多）/最低Low（空）'], ['close', '最高收盘（多）/最低收盘（空）']], '参照价')}</span></div>
+    <div id="g_atr" class="frow" style="margin-top:6px">${f('c_k', '倍数 k', 3, 'any', 0)}${f('c_atrN', 'ATR 周期', 20, 1, 2)}${sel('c_atrMode', [['cur', '当前bar ATR'], ['entry', '入场时固定ATR']], 'ATR 取值')}<span class="dim">止损 = 参照最高价 − k×ATR</span></div>
+    <div id="g_bb" class="frow" style="margin-top:6px">${f('c_m', '倍数 m', 0.75, 'any', 0)}${f('c_bbN', '周期', 20, 1, 2)}${f('c_bbSd', '标准差倍数', 2, 'any', 0)}${sel('c_bbMode', mode.slice().reverse(), '宽度')}<span class="dim">宽度 W = 2×(标准差倍数)×std(收盘,周期)；默认 W=4σ</span></div>
+    <div id="g_donch" class="frow" style="margin-top:6px">${f('c_dm', '倍数 m', 0.75, 'any', 0)}${f('c_dN', '周期 N', 20, 1, 2)}${sel('c_dMode', mode, '宽度')}<span class="dim">宽度 D = 最近N根最高High − 最低Low；止损 = 参照最高价 − m×D</span></div>
+    <div id="g_pct" class="frow" style="margin-top:6px">${f('c_pct', '回撤 %', 5, 'any', 0)}<span class="dim">止损 = 最高价×(1−x%)，只上移</span></div>
+    <div id="g_fixed" class="frow" style="margin-top:6px">${sel('c_fixUnit', [['atr', '按 ATR 倍数'], ['pct', '按百分比']], '距离')}<span id="g_fixK">${f('c_fixK', '倍数', 3, 'any', 0)}${f('c_fixN', 'ATR 周期', 20, 1, 2)}</span><span id="g_fixPct">${f('c_fixPct', '距离 %', 5, 'any', 0)}</span><span class="dim">止损 = 入场价 ∓ 距离，不随价格移动</span></div></div>
+  <div class="cfgsec"><h4>出场条件</h4><div class="frow">
+    ${sel('c_trig', [['close', '收盘价判断，收盘价成交（默认）'], ['intra', '盘中 High/Low 触及，止损价成交（跳空取开盘价）']], '触发口径')}</div>
+    <div class="frow" style="margin-top:6px"><label><input type="checkbox" id="c_tpOn">止盈</label>${sel('c_tpUnit', [['R', 'R 倍数'], ['pct', '百分比 %']], '')}${f('c_tpV', '数值', 3, 'any', 0)}
+    ${f('c_maxHold', '最长持仓(根，0=无限)', 0, 1, 0)}</div>
+    <div class="frow" style="margin-top:6px"><label><input type="checkbox" id="c_donExit">唐奇安出场（多单跌破前N根最低Low；空单反之）</label>${f('c_donExitN', 'N', 10, 1, 1)}</div></div>
+  <div class="cfgsec"><h4>费用</h4><div class="frow">${f('c_fee', '单边费率 %', 0.02, 'any', 0)}<span class="dim">默认 0.02%（双边 0.04%）</span></div></div>
+  <div class="cfgerr" id="c_err"></div>
+  <div class="foot" style="text-align:right"><button id="c_done" class="btn-acc">完成 <span class="kb">Esc</span></button></div>`;
+  const apply = () => {
+    const {cfg, err} = readForm(); showTypeGroups();
+    $('c_err').textContent = err.join('；');
+    if (!err.length) { ST.cfg = cfg; saveSettings(); renderPresetSel(); renderAll(); refreshPreview(); }
+  };
+  $('cfgModal').querySelectorAll('input,select').forEach(el => { if (!/^p_/.test(el.id)) { el.addEventListener('input', apply); el.addEventListener('change', apply); } });
+  $('c_done').onclick = closeCfg;
+  $('p_load').onclick = () => { const p = allPresets()[+$('p_sel').value]; if (p) { ST.cfg = normCfg(p.cfg); writeForm(ST.cfg); $('c_err').textContent = ''; saveSettings(); renderPresetSel(); renderAll(); $('p_msg').textContent = `已加载「${p.name}」`; } };
+  $('p_save').onclick = () => {
+    const name = $('p_name').value.trim(), {cfg, err} = readForm();
+    if (err.length) { $('p_msg').textContent = '配置无效：' + err[0]; return; }
+    if (!name) { $('p_msg').textContent = '请先输入预设名称'; return; }
+    if (BUILTIN.some(p => p.name === name)) { $('p_msg').textContent = '内置预设不可覆盖，请换一个名称'; return; }
+    const ex = S.customPresets.findIndex(p => p.name === name), item = {name, cfg: canonCfg(cfg)};
+    if (ex >= 0) S.customPresets[ex] = item; else S.customPresets.push(item);
+    savePresets(); renderPresetSel(); renderAll(); $('p_msg').textContent = `已保存「${name}」（共 ${S.customPresets.length} 个自定义预设）`;
+  };
+  $('p_del').onclick = () => {
+    const k = +$('p_sel').value; if (k < BUILTIN.length) { $('p_msg').textContent = '内置预设不可删除'; return; }
+    const nm = S.customPresets[k - BUILTIN.length].name; S.customPresets.splice(k - BUILTIN.length, 1); savePresets(); renderPresetSel(); renderAll(); $('p_msg').textContent = `已删除「${nm}」`;
+  };
+  $('p_sel').onchange = () => { const p = allPresets()[+$('p_sel').value]; if (p && p.name) $('p_name').value = BUILTIN.includes(p) ? '' : p.name; };
+}
+function renderPresetSel() {
+  const ps = allPresets(), cur = cfgKey(ST.cfg), idx = ps.findIndex(p => cfgKey(p.cfg) === cur);
+  $('p_sel').innerHTML = ps.map((p, k) => `<option value="${k}">${k < BUILTIN.length ? '【内置】' : ''}${p.name}</option>`).join('');
+  if (idx >= 0) $('p_sel').value = idx;
+}
+function openCfg() { stopPlay(); writeForm(ST.cfg); renderPresetSel(); $('c_err').textContent = ''; $('mask2').style.display = 'flex'; }
+function closeCfg() { $('mask2').style.display = 'none'; saveSettings(); renderAll(); }
+
 /* ================= 数据集加载 / 重开 ================= */
+function migrateTrade(t) { if (!t.cfg) t.cfg = canonCfg((BUILTIN[LEGACY_RULE[t.rule] || 0]).cfg); t.cfg = normCfg(t.cfg); return t; }
 async function loadDataset(asset, tf) {
   stopPlay(); $('loading').style.display = 'flex';
   const key = asset + '|' + tf;
-  if (!S.cache[key]) {
-    const D = await decodeDataset(DATA[asset][tf]);
-    S.cache[key] = {D, I: buildInd(D)};
-  }
-  S.asset = asset; S.tf = tf; S.D = S.cache[key].D; S.I = S.cache[key].I;
+  if (!S.cache[key]) { const D = await decodeDataset(DATA[asset][tf]); S.cache[key] = {D, I: buildInd(D)}; }
+  S.asset = asset; S.tf = tf; S.D = S.cache[key].D; S.I = S.cache[key].I; S.ebS = {};
   const D = S.D;
   let s = 0; while (s < D.n && D.t[s] < ENTRY_START) s++;
   S.start = s; S.cursor = s; S.trades = []; S.pos = null; S.last = null;
-  // 恢复进度
   try {
     const sv = JSON.parse(localStorage.getItem(keyOf()) || 'null');
     if (sv && sv.cursor >= s && sv.cursor < D.n) {
-      S.cursor = sv.cursor; S.trades = sv.trades || [];
-      if (sv.pos) { const p = newPos(D, S.I, sv.pos.i, sv.pos.side, sv.pos.rule, true); while (p.j < S.cursor) { if (stepPos(D, S.I, p)) break; } if (p.j === S.cursor) S.pos = p; }
-      if (S.trades.length) { const lt = S.trades[S.trades.length - 1]; const r = simulate(D, S.I, lt.i, lt.side, lt.rule, true); S.last = Object.assign({path: r.path}, lt); }
+      S.cursor = sv.cursor; S.trades = (sv.trades || []).map(migrateTrade);
+      if (sv.pos) {
+        const pc = sv.pos.cfg || BUILTIN[LEGACY_RULE[sv.pos.rule] || 0].cfg;
+        const p = newPos(D, S.I, sv.pos.i, sv.pos.side, pc, true); while (p.j < S.cursor) { if (stepPos(D, S.I, p)) break; } if (p.j === S.cursor) S.pos = p;
+      }
+      if (S.trades.length) { const lt = S.trades[S.trades.length - 1]; const r = simulate(D, S.I, lt.i, lt.side, lt.cfg, true); S.last = Object.assign({path: r.path, tp: initLevels(D, S.I, lt.i, lt.side, lt.cfg).tp}, lt); }
     }
   } catch (e) { console.warn('恢复进度失败', e); }
   $('slider').min = s; $('slider').max = D.n - 1; $('slider').value = S.cursor;
   $('selAsset').value = asset; $('selTf').value = tf;
-  if (ST.ovLog === null || ST.ovLog === undefined) ST.ovLog = false;
   const asDefault = ASSETS.find(a => a[0] === asset)[3];
   const lg = localStorage.getItem('tradegame_v1_log_' + asset); ST.ovLog = lg === null ? !!asDefault : lg === '1';
   $('ovLog').checked = ST.ovLog;
   setPriceFmt(); applyScale(); resetSeries();
-  if (S.pos) focusRange(S.pos.i, S.cursor); else tail(S.cursor - s > 120 ? 120 : 120);
+  if (S.pos) focusRange(S.pos.i, S.cursor); else tail(120);
   renderAll(); saveSettings();
   $('loading').style.display = 'none';
 }
 function restart() {
   if (!confirm(`确定重新开始 ${S.asset} ${S.tf}？当前交易记录和进度将清空（可先导出 CSV）。`)) return;
   stopPlay(); try { localStorage.removeItem(keyOf()); } catch (e) {}
-  S.trades = []; S.pos = null; S.last = null; S.cursor = S.start; S.eb = {};
+  S.trades = []; S.pos = null; S.last = null; S.cursor = S.start; S.ebS = {};
   resetSeries(); tail(120); renderAll(); saveProgress();
 }
 
@@ -684,13 +951,13 @@ function restart() {
 function showHelp() {
   S.modalTrade = null;
   $('modal').innerHTML = `<h2>玩法与口径</h2><div class="help">
-  <p><b>玩法</b>：只显示当前K线及之前；用 <code>→</code>/按钮/滑块/自动播放往后走，<b>不能回退</b>。在某根K线<b>收盘价</b>下单（<code>B</code> 做多，<code>S</code> 做空），按所选止损规则自动出场。默认直接跳到平仓K线并弹出结果；取消“自动跳转”可持仓中逐根看。同一时刻只持一笔。</p>
-  <p><b>3ATR 吊灯</b>：止损 = 入场后最高High − 3×当前K线 ATR20，只上移，收盘价触发并以收盘价成交；空单镜像（最低Low + 3×ATR20，只下移）。</p>
-  <p><b>布林带止损</b>：W0 = 4×std20(收盘价) 入场时固定；止损 = 入场后最高High − m×W0（m 可选 0.75 / 1.0）；空单镜像。</p>
-  <p>入场K线自身的High/Low计入极值，但入场K线不判定止损；从下一根起每根收盘判定。双边各 0.02% 费用；R = 净收益 ÷ 入场止损距离。</p>
-  <p>数据结束仍未触发止损 → 按最后收盘价计，标注“未平仓”。</p>
+  <p><b>玩法</b>：只显示当前K线及之前；用 <code>→</code>/按钮/滑块/自动播放往后走，<b>不能回退</b>。在某根K线<b>收盘价</b>下单（<code>B</code> 做多，<code>S</code> 做空），按止损配置自动出场。默认直接跳到平仓K线并弹出结果；取消“自动跳转”可持仓中逐根看。同一时刻只持一笔。下单前图上虚线预览多/空初始止损（及止盈）。</p>
+  <p><b>止损类型</b>（⚙ 止损配置）：ATR 吊灯（k、周期、当前bar/入场固定）；布林带宽（W=2×σ倍数×std，默认 4σ，m、周期、入场固定/随当前bar）；<b>唐奇安通道宽度</b>（D=最近N根最高High−最低Low，止损=参照最高价−m×D，默认 m=0.75、N=20、随当前bar：BTC 4h 平均持仓 25.7 根，与 3ATR 的 25.5 根相当）；百分比移动止损（最高点回撤x%）；固定止损（按ATR倍数或百分比，不移动）。移动止损只往有利方向移动；空单镜像。</p>
+  <p><b>参照价</b>：最高High（默认）或最高收盘。<b>触发口径</b>：①收盘价判断、收盘价成交（默认，当根先用本根High/Low更新止损线再比较收盘）；②盘中触及：用上一根收盘后的止损线判断本根Low/High，成交价=止损线，若本根开盘已跳空越线则成交价=开盘价，本根未触发才更新止损线。</p>
+  <p><b>可选</b>：止盈（R倍数=入场止损距离的倍数，或百分比）；最长持仓根数（满N根后若未出场，则在该根收盘平仓）；唐奇安出场（多单价格<=前N根（不含当前根）最低Low则出场，空单镜像）。同一根同时满足多个出场：不利出场优先于止盈。入场K线只用于初始化，不判定出场。数据结束未触发 → 按最后收盘计，标注“未平仓”。</p>
+  <p><b>R</b> = 净收益 ÷ 入场止损距离（dist0）。费率默认单边 0.02%，可改。每笔交易保存当时完整配置，成绩面板按配置分组统计。预设（含自定义）保存在 localStorage。</p>
   <p><b>快捷键</b>：<code>→</code> 下一根，<code>Shift+→</code> +10 根，<code>Space</code> 播放/暂停，<code>B</code> 做多，<code>S</code> 做空，<code>Enter/Esc</code> 关闭弹窗。</p>
-  <p><b>基准</b>：“每根都进”= 同方向同止损规则、起点起每根K线收盘入场的平均净收益（只统计当前已出场的，不看未来）。进度和交易记录自动保存在浏览器 localStorage。</p>
+  <p><b>基准</b>：“每根都进”= 同配置、同方向，起点起每根K线收盘入场的平均净收益；在浏览器里随回放增量计算，只统计已出场的，不看未来。</p>
   <p class="dim">数据：4h 与日线；起点 2017-08-17 04:00 UTC 起；时间为K线开盘时间。外汇/金属/指数/原油日线按纽约 17:00 切日。</p></div>
   <div class="foot"><button id="mClose" class="btn-acc">知道了</button></div>`;
   $('mask').style.display = 'flex'; $('mClose').onclick = closeModal;
@@ -701,7 +968,8 @@ function bind() {
   $('selTf').onchange = () => { saveProgress(); loadDataset(S.asset, $('selTf').value); };
   $('selTz').onchange = () => { ST.tz = +$('selTz').value; saveSettings(); resetSeries(); renderAll(); };
   $('selColor').onchange = () => { ST.color = $('selColor').value; saveSettings(); applyColors(); resetSeries(); renderAll(); };
-  $('selRule').onchange = () => { ST.rule = $('selRule').value; saveSettings(); renderAll(); };
+  $('selPreset').onchange = () => { const p = allPresets()[+$('selPreset').value]; if (p) { ST.cfg = normCfg(p.cfg); saveSettings(); renderAll(); refreshPreview(); } };
+  $('btnCfg').onclick = openCfg;
   $('chkJump').onchange = () => { ST.jump = $('chkJump').checked; saveSettings(); };
   $('selSpeed').onchange = () => { ST.speed = +$('selSpeed').value; saveSettings(); };
   const ov = (id, key, fn) => $(id).onchange = () => { ST[key] = $(id).checked; if (key === 'ovLog') localStorage.setItem('tradegame_v1_log_' + S.asset, ST.ovLog ? '1' : '0'); saveSettings(); fn(); };
@@ -716,28 +984,29 @@ function bind() {
   $('btnRestart').onclick = restart; $('btnCsv').onclick = exportCsv; $('btnHelp').onclick = showHelp;
   $('slider').oninput = () => { const v = +$('slider').value; if (v <= S.cursor) { $('slider').value = S.cursor; return; } advance(v); $('slider').value = S.cursor; };
   window.addEventListener('keydown', e => {
+    if ($('mask2').style.display === 'flex') { if (e.key === 'Escape') { e.preventDefault(); closeCfg(); } return; }
     if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
-    const modal = $('mask').style.display === 'flex';
-    if (modal) { if (['Enter', 'Escape', ' '].includes(e.key)) { e.preventDefault(); closeModal(); } return; }
+    if ($('mask').style.display === 'flex') { if (['Enter', 'Escape', ' '].includes(e.key)) { e.preventDefault(); closeModal(); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); advance(S.cursor + (e.shiftKey ? 10 : 1)); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') e.preventDefault();
     else if (e.key === ' ') { e.preventDefault(); S.playing ? stopPlay() : startPlay(); }
     else if (e.key === 'b' || e.key === 'B') placeOrder(1);
     else if (e.key === 's' || e.key === 'S') placeOrder(-1);
   });
   $('mask').addEventListener('mousedown', e => { if (e.target === $('mask')) closeModal(); });
+  $('mask2').addEventListener('mousedown', e => { if (e.target === $('mask2')) closeCfg(); });
 }
 async function main() {
-  loadSettings();
-  bind(); initChart();
+  loadSettings(); buildCfgModal(); bind(); initChart();
   $('ovEwma').checked = ST.ovEwma; $('ovBB').checked = ST.ovBB; $('ovAtr').checked = ST.ovAtr;
-  $('selRule').value = ST.rule; $('chkJump').checked = ST.jump; $('selTz').value = ST.tz; $('selColor').value = ST.color; $('selSpeed').value = ST.speed;
+  $('chkJump').checked = ST.jump; $('selTz').value = ST.tz; $('selColor').value = ST.color; $('selSpeed').value = ST.speed;
   if (!DATA[S.asset] || !DATA[S.asset][S.tf]) { S.asset = 'BTCUSDT'; S.tf = '4h'; }
   try { await loadDataset(S.asset, S.tf); } catch (e) { $('loading').style.display = 'flex'; $('loading').textContent = '加载失败：' + e.message; console.error(e); }
   window.__ready = true;
 }
-window.TG = {S, ST, RULES, FEE, ENTRY_START, buildInd, newPos, stepPos, finishPos, simulate, everyBar, canEnter, decodeDataset, advance, placeOrder, DATA, loadDataset};
+window.TG = {S, ST, BUILTIN, DEF, FEE: 0.0002, ENTRY_START, buildInd, newPos, stepPos, finishPos, simulate, everyBar, canEnter, decodeDataset, advance, placeOrder, loadDataset,
+  normCfg, canonCfg, cfgKey, ebNew, ebCatch, initLevels, indArr, openCfg, closeCfg, mkCfg, describeCfg};
 main();
 
 </script>
